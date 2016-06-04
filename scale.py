@@ -1,10 +1,15 @@
 import numpy as np
-from IPython.display import clear_output
 import random
+import copy
+import json
+import urllib2
+import httplib
+import time
+from IPython.display import clear_output
 
 class State:
-        """ resoConsumed - resource consumed (nvm, mem)
-            resoConfigured - resource configured (nvm, mem)
+        """ resoConsumed - resource consumed (nvm, cpu, mem)
+            resoConfigured - resource configured (nvm, ,cpu, mem)
             actualLatency - current latency
             expectedLatency - expected latency by SLO """
 
@@ -13,11 +18,23 @@ class State:
                 self.resoConfigured = resoConfigured
                 self.actualLatency = actualLatency
                 self.expectedLatency = expectedLatency
+	
+	def prt(self):
+		print "-------------------"
+		print self.resoConsumed
+		print self.resoConfigured
+		print self.actualLatency
+		print self.expectedLatency
 
 def initQtable():
-	""" The Q table is a 5-dimensional numpy array (10x5x1x1x1
+	""" The Q table is a 3-dimensional numpy array
 	    First dimension is number of vms (1-10)
-	    Second dimension is memory  utilization ranges:  0) 0% - 20%
+	    Second dimension is memory utilization ranges:  0) 0% - 20%
+							     1) 20% - 40%
+							     2) 40% - 60%
+							     3) 60% - 80%
+							     4) 80% - 100%
+	    Third dimension is cpu utilization ranges:  0) 0% - 20%
 							     1) 20% - 40%
 							     2) 40% - 60%
 							     3) 60% - 80%
@@ -29,39 +46,160 @@ def initQtable():
 	state = np.zeros((50,3))
 	return state
 
-def scaleAPI(state, action):
-	return state
+def getMetricsRestAPI():
+	
+	readSuccess = False
 
-def currentStateAPI():
-	return State( np.array([1, random.random(), random.random(), random.random(), random.random()]), 
-		      np.array([10, 1, 1, 1, 1]), 2.3333, 2.444)
+	while True:
+		try:
+			rest_response = json.load(urllib2.urlopen("http://quickscaling.ml/GetLatestData"))
+			break;
+		except (httplib.HTTPException, httplib.IncompleteRead, urllib2.URLError):
+			print "Reading API has failed, retrying"
+
+        cState = State( np.array([rest_response['replicas'], rest_response['cpu'], rest_response['ram']]),
+                        np.array([10, rest_response['MaxCpu'], rest_response['MaxRam']]),
+                        rest_response['responseTime'],
+                        1500)
+	return cState
 
 def getCurrentState():
-	return State( np.array([ 2, 0.20, 0.10, 0.23, 0.67 ]), np.array([ 5, 0.40, 0.71, 0.30, 0.922 ]), 2.3333, 2.444)
+	resoConsumedArray = np.array([[1, 150, 150],
+				      [2, 150, 150],
+				      [2, 140, 150],
+				      [2, 150, 150],
+				      [2, 150, 150],
+				      [2, 150, 150],
+				      [2, 150, 150],
+				      [2, 150, 150],
+				      [2, 150, 150],
+				      [2, 150, 150],
+				      [2, 150, 150],
+				      [2, 150, 150],
+				      [2, 150, 150],
+				      [2, 150, 150],
+				      [2, 150, 150],
+				      [2, 150, 150],
+				      [2, 150, 150],
+				      [2, 150, 150],
+				      [2, 150, 150],
+				      [2, 150, 150],
+				      [2, 150, 150]])
+	
+	resoConfiguredArray = np.array([[10, 200, 200],
+				        [10, 200, 200],		
+				        [10, 200, 200],		
+				        [10, 200, 200],		
+				        [10, 200, 200],		
+				        [10, 200, 200],		
+				        [10, 200, 200],		
+				        [10, 200, 200],		
+				        [10, 200, 200],		
+				        [10, 200, 200],		
+				        [10, 200, 200],		
+				        [10, 200, 200],		
+				        [10, 200, 200],		
+				        [10, 200, 200],		
+				        [10, 200, 200],		
+				        [10, 200, 200],		
+				        [10, 200, 200],		
+				        [10, 200, 200],		
+				        [10, 200, 200],		
+				        [10, 200, 200],		
+				        [10, 200, 200]])
+
+	actualLatencyArray = np.array([6,
+				       5.6,
+				       5.2,
+				       5.3,
+				       5.3,
+				       5,
+				       4.7,
+				       4.6,
+				       4.1,
+				       3.9,
+				       3.0,
+				       2.9,
+				       2.5,
+				       2.4,
+				       2.2,
+				       2.4,
+				       2.5,
+				       2.5,
+				       2.4,
+				       2.3,
+				       2.5])
+	
+	expectedLatency = 2.5
+	
+	print "Current counter %d" % getCurrentState.counter	
+
+	cState = State( resoConsumedArray[getCurrentState.counter], 
+			resoConfiguredArray[getCurrentState.counter], 
+			actualLatencyArray[getCurrentState.counter],
+			expectedLatency)
+	getCurrentState.counter += 1
+
+	return cState
+
+def scaleAPI(state,action):
+	numOfReplicas = state.resoConsumed[0]
+	
+	 # scale up
+        if action == 1:
+		numOfReplicas += 1
+        # scale down
+        elif action == 2:
+		numOfReplicas -= 1
+	
+	
+	if action != 0:
+		data = {'spec': {'replicas': numOfReplicas}}
+		req = urllib2.Request('http://kube.quickscaling.ml/api/v1/namespaces/default/replicationcontrollers/geoserver-controller')
+		req.get_method = lambda: 'PATCH'
+		req.add_header('Content-Type', 'application/merge-patch+json')
+
+		response = urllib2.urlopen(req, json.dumps(data))
+	
+	print "Performing  %d action" % action
 
 def makeAction(state, action):
-	new_state = state.deepcopy(state)
 
 	# scale up
 	if action == 1:
 		# maximum number of vms is 10
-		if state.resoConsumed < 10:
-			#new_state.resoConsumed[0]++
-			new_state = scaleAPI(state, action)
+		if state.resoConsumed[0] < 10:
+			scaleAPI(state, action)
 	# scale down
 	elif action == 2:
 		# minimum number of vms is 1
-		if state.resoConsumed > 1:
-			#new_state.resoConsumed[0]--
-			new_state = scaleAPI(state, action)
+		if state.resoConsumed[0] > 1:
+			scaleAPI(state, action)
 
 def getReward(state):
-	yNorm = state.actualLatency / float(state.expectedLatency)
+	yNorm = float(state.actualLatency) / float(state.expectedLatency)
+	print "actualLatency:%f / expectedLatency:%f ratio %f" % (state.actualLatency, state.expectedLatency, yNorm)
+
 	scoreSLO = np.sign( 1 - yNorm ) * np.exp( np.absolute( 1 - yNorm ) )
-	vResource = np.divide(state.resoConsumed, state.resoConfigured)
+	print "SLO score: %f" % scoreSLO
+
+	vResource = np.true_divide(state.resoConsumed, state.resoConfigured)
+	print "state.resoConsumed:"
+	print state.resoConsumed
+	print "state.resoConfigured:"
+	print state.resoConfigured
+	print "state.resoConsumed / state.resoConfigured:"
+	print vResource
+
 	uConstrained = np.max(vResource)
+	print "uConstrained max(vResource): %f" % uConstrained
+
 	scoreU = np.exp( 1 - uConstrained )
+	print "scoreU: %f" % scoreU
+
 	reward = scoreSLO * scoreU
+	print "Reward= scoreSLO(%f) * scoreU(%f) = %f" % (scoreSLO,scoreU,reward)
+
 	return reward
 
 def heuristicPolicy(state, y):
@@ -84,20 +222,26 @@ def heuristicPolicy(state, y):
 def mapRawStateToQtableRow(state):
 	# Map number of vms to Qtable vm column
 	stateQtableVms = (state.resoConsumed[0].astype(int) - 1) * 5 #resoConsumed first field is number of vms
-
-	# Map memory utilization to Qtable memory column
-	if 0.0 <= state.resoConsumed[1] < 0.2:
-		stateQtableMemory = 0
-	elif 0.2 <= state.resoConsumed[1] < 0.4:
-		stateQtableMemory = 1
-	elif 0.4 <= state.resoConsumed[1] < 0.6:
-                stateQtableMemory = 2
-	elif 0.6 <= state.resoConsumed[1] < 0.8:
-                stateQtableMemory = 3
-	elif 0.2 <= state.resoConsumed[1] <= 1:
-                stateQtableMemory = 4
 	
-	QtableRow = stateQtableVms + stateQtableMemory
+	resourceRetio = np.true_divide(state.resoConsumed, state.resoConfigured)
+
+	# Map CPU utilization to Qtable memory column
+	if 0.0 <= resourceRetio[1] < 0.2:
+		stateQtableCPU = 0
+	elif 0.2 <= resourceRetio[1] < 0.4:
+		stateQtableCPU = 1
+	elif 0.4 <= resourceRetio[1] < 0.6:
+                stateQtableCPU = 2
+	elif 0.6 <= resourceRetio[1] < 0.8:
+                stateQtableCPU = 3
+	elif 0.2 <= resourceRetio[1] <= 1:
+                stateQtabeCPU = 4
+	else:
+		stateQtableCPU = 0
+	
+	QtableRow = stateQtableVms + stateQtableCPU	
+	print "Mapping [%f, %f, %f] to rowNum: %d" % (resourceRetio[0], resourceRetio[1], resourceRetio[2], QtableRow)
+
 	return QtableRow
 
 def getOptimalActionQtable(mappedQtableRow,Qtable):
@@ -113,15 +257,20 @@ learningRate = 0.6
 gamma = 0.9 
 epsilon = 1
 epochs = 20
+i = 0
 
 Qtable = initQtable()
 
-state = currentStateAPI()
+getCurrentState.counter = 0
 
-for i in range(epochs):
+state = getMetricsRestAPI() #getCurrentState()
+
+#for i in range(epochs):
+while True:
+	i += 1
 	print "\nStep %d" % i 
 	stateRow = mapRawStateToQtableRow(state)
-
+	
 	if (random.random() < epsilon): 
 		# use heuristics
 		action = heuristicPolicy(state, 0.3)
@@ -137,8 +286,16 @@ for i in range(epochs):
 
 	#Take action, observe new state S'
 	# ---- perfom action
+	makeAction(state, action)
+	
+	# Wait 1 minute
+	print "Sleeping for 1 minute"
+	time.sleep(60)
+
 	# get the new state
-	new_state = currentStateAPI()
+	new_state = getMetricsRestAPI() #getCurrentState()
+	print "New state:"
+	print new_state.prt()
 
 	#Observe reward
 	reward = getReward(new_state)
@@ -154,6 +311,8 @@ for i in range(epochs):
 	Qtable[stateRow, action] = update
 
 	state = new_state
+	
+	print Qtable
 
 	if epsilon > 0.1:
         	epsilon -= (1/epochs)
