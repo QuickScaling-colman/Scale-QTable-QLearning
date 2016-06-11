@@ -43,7 +43,7 @@ def initQtable():
 	    Fourth dimension is Q value of the action - Scale up
 	    Fifth dimension is Q value of the action - Scale down """
 
-	state = np.zeros((50,3))
+	state = np.zeros((250,3))
 	return state
 
 def getMetricsRestAPI():
@@ -53,92 +53,20 @@ def getMetricsRestAPI():
 	while True:
 		try:
 			rest_response = json.load(urllib2.urlopen("http://quickscaling.ml/GetLatestData"))
-			break;
-		except (httplib.HTTPException, httplib.IncompleteRead, urllib2.URLError):
-			print "Reading API has failed, retrying"
 
-        cState = State( np.array([rest_response['replicas'], rest_response['cpu'], rest_response['ram']]),
+			cState = State( np.array([rest_response['replicas'], rest_response['cpu'], rest_response['ram']]),
                         np.array([10, rest_response['MaxCpu'], rest_response['MaxRam']]),
                         rest_response['responseTime'],
-                        1500)
-	return cState
+                        4000)
 
-def getCurrentState():
-	resoConsumedArray = np.array([[1, 150, 150],
-				      [2, 150, 150],
-				      [2, 140, 150],
-				      [2, 150, 150],
-				      [2, 150, 150],
-				      [2, 150, 150],
-				      [2, 150, 150],
-				      [2, 150, 150],
-				      [2, 150, 150],
-				      [2, 150, 150],
-				      [2, 150, 150],
-				      [2, 150, 150],
-				      [2, 150, 150],
-				      [2, 150, 150],
-				      [2, 150, 150],
-				      [2, 150, 150],
-				      [2, 150, 150],
-				      [2, 150, 150],
-				      [2, 150, 150],
-				      [2, 150, 150],
-				      [2, 150, 150]])
-	
-	resoConfiguredArray = np.array([[10, 200, 200],
-				        [10, 200, 200],		
-				        [10, 200, 200],		
-				        [10, 200, 200],		
-				        [10, 200, 200],		
-				        [10, 200, 200],		
-				        [10, 200, 200],		
-				        [10, 200, 200],		
-				        [10, 200, 200],		
-				        [10, 200, 200],		
-				        [10, 200, 200],		
-				        [10, 200, 200],		
-				        [10, 200, 200],		
-				        [10, 200, 200],		
-				        [10, 200, 200],		
-				        [10, 200, 200],		
-				        [10, 200, 200],		
-				        [10, 200, 200],		
-				        [10, 200, 200],		
-				        [10, 200, 200],		
-				        [10, 200, 200]])
+			print rest_response
 
-	actualLatencyArray = np.array([6,
-				       5.6,
-				       5.2,
-				       5.3,
-				       5.3,
-				       5,
-				       4.7,
-				       4.6,
-				       4.1,
-				       3.9,
-				       3.0,
-				       2.9,
-				       2.5,
-				       2.4,
-				       2.2,
-				       2.4,
-				       2.5,
-				       2.5,
-				       2.4,
-				       2.3,
-				       2.5])
-	
-	expectedLatency = 2.5
-	
-	print "Current counter %d" % getCurrentState.counter	
+			if (cState.resoConfigured[0] != 0 and cState.resoConfigured[1] != 0 and cState.resoConfigured[2] != 0 and
+                  	    cState.resoConsumed[0] != 0 and cState.resoConsumed[1] != 0 and cState.resoConsumed[2] != 0):
+				break;
 
-	cState = State( resoConsumedArray[getCurrentState.counter], 
-			resoConfiguredArray[getCurrentState.counter], 
-			actualLatencyArray[getCurrentState.counter],
-			expectedLatency)
-	getCurrentState.counter += 1
+		except (httplib.HTTPException, httplib.IncompleteRead, urllib2.URLError):
+			print "Reading API has failed, retrying"
 
 	return cState
 
@@ -155,7 +83,7 @@ def scaleAPI(state,action):
 	
 	if action != 0:
 		data = {'spec': {'replicas': numOfReplicas}}
-		req = urllib2.Request('http://kube.quickscaling.ml/api/v1/namespaces/default/replicationcontrollers/geoserver-controller')
+		req = urllib2.Request('http://kube.quickscaling.ml/api/v1/namespaces/default/replicationcontrollers/stress-controller')
 		req.get_method = lambda: 'PATCH'
 		req.add_header('Content-Type', 'application/merge-patch+json')
 
@@ -203,8 +131,8 @@ def getReward(state):
 	return reward
 
 def heuristicPolicy(state, y):
-	topSLObound = (1 - y) * float(state.expectedLatency)
-	lowSLOblound = y * float(state.expectedLatency)
+	topSLObound = float(state.expectedLatency) + y * float(state.expectedLatency) 
+	lowSLOblound = float(state.expectedLatency) - y * float(state.expectedLatency)
 	
 	print "Lower SLO bound: %f" % lowSLOblound
 	print "Top SLO bound: %f" % topSLObound
@@ -224,7 +152,8 @@ def mapRawStateToQtableRow(state):
 	stateQtableVms = (state.resoConsumed[0].astype(int) - 1) * 5 #resoConsumed first field is number of vms
 	
 	resourceRetio = np.true_divide(state.resoConsumed, state.resoConfigured)
-
+	
+	stateQtableCPU = 0
 	# Map CPU utilization to Qtable memory column
 	if 0.0 <= resourceRetio[1] < 0.2:
 		stateQtableCPU = 0
@@ -239,7 +168,22 @@ def mapRawStateToQtableRow(state):
 	else:
 		stateQtableCPU = 0
 	
-	QtableRow = stateQtableVms + stateQtableCPU	
+	stateQtableMEM = 0
+        # Map Memory utilization to Qtable memory column
+        if 0.0 <= resourceRetio[2] < 0.2:
+                stateQtableMEM = 0
+        elif 0.2 <= resourceRetio[2] < 0.4:
+                stateQtableMEM = 1
+        elif 0.4 <= resourceRetio[2] < 0.6:
+                stateQtableMEM = 2
+        elif 0.6 <= resourceRetio[2] < 0.8:
+                stateQtableMEM = 3
+        elif 0.2 <= resourceRetio[2] <= 1:
+                stateQtabeMEM = 4
+        else:
+                stateQtableMEM = 0
+
+	QtableRow = stateQtableVms + stateQtableCPU + stateQtableMEM
 	print "Mapping [%f, %f, %f] to rowNum: %d" % (resourceRetio[0], resourceRetio[1], resourceRetio[2], QtableRow)
 
 	return QtableRow
@@ -256,12 +200,10 @@ def getOptimalActionQtable(mappedQtableRow,Qtable):
 learningRate = 0.6
 gamma = 0.9 
 epsilon = 1
-epochs = 20
+waitTimeSeconds = 30
 i = 0
 
 Qtable = initQtable()
-
-getCurrentState.counter = 0
 
 state = getMetricsRestAPI() #getCurrentState()
 
@@ -271,7 +213,11 @@ while True:
 	print "\nStep %d" % i 
 	stateRow = mapRawStateToQtableRow(state)
 	
-	if (random.random() < epsilon): 
+	randomNum = random.random()
+	print "Current epsilon: %f" % epsilon
+	print "Currnt random num: %f" % randomNum
+
+	if (randomNum < epsilon): 
 		# use heuristics
 		action = heuristicPolicy(state, 0.3)
 		print ("Performing heuristic action")
@@ -289,8 +235,8 @@ while True:
 	makeAction(state, action)
 	
 	# Wait 1 minute
-	print "Sleeping for 1 minute"
-	time.sleep(60)
+	print "Sleeping for %d minute" % waitTimeSeconds
+	time.sleep(waitTimeSeconds)
 
 	# get the new state
 	new_state = getMetricsRestAPI() #getCurrentState()
@@ -313,7 +259,8 @@ while True:
 	state = new_state
 	
 	print Qtable
+	np.savetxt("Qtable.txt", Qtable)
 
 	if epsilon > 0.1:
-        	epsilon -= (1/epochs)
+        	epsilon -= 0.005
 	print "---------------------"
